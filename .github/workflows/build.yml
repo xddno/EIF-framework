@@ -1,0 +1,73 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 8
+          cache: maven
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build File2Hex
+        shell: cmd
+        working-directory: File2Hex
+        run: |
+          if not exist "File2Hex.exe" (
+            cl /nologo /std:c++20 /EHsc /O2 /DNDEBUG /FeFile2Hex.exe main.cpp
+            if not exist "File2Hex.exe" exit /b 1
+          )
+
+      - name: Build JAR
+        shell: cmd
+        run: |
+          mvn clean package -Dremapper.destinationNamespace=named -Dmaven.repo.local=EIF/local_maven_repo
+          if %ERRORLEVEL% NEQ 0 exit /b 1
+
+      - name: Convert JAR to C++ header
+        shell: cmd
+        run: |
+          if not exist "EIF\remapped" mkdir EIF\remapped
+          copy /y EIF\target\EIF-1.0-SNAPSHOT-shaded.jar EIF\remapped\EIF-framework.jar
+          copy /y EIF\remapped\EIF-framework.jar EIF\remapped\payload.jar
+          pushd EIF\remapped
+          ..\..\File2Hex\File2Hex.exe
+          popd
+          copy /y EIF\remapped\payload.jar.hpp src\payload.jar.hpp
+          if %ERRORLEVEL% NEQ 0 exit /b 1
+
+      - name: Build DLL
+        shell: cmd
+        run: |
+          if exist build rmdir /s /q build
+          cmake -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMINECRAFT_CLASS="net/minecraft/client/Minecraft" --fresh
+          cmake --build build
+          if %ERRORLEVEL% NEQ 0 exit /b 1
+
+      - name: Verify DLL exists
+        shell: cmd
+        run: |
+          if not exist "build\JarLoader.dll" (
+            echo ERROR: build\JarLoader.dll was not created!
+            dir build
+            exit /b 1
+          )
+          echo DLL exists: build\JarLoader.dll
+
+      - name: Upload DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: JarLoader
+          path: build/JarLoader.dll
